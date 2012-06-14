@@ -20,7 +20,7 @@ thresholding of consecutive dark blotches for a row (column). The
 brightness (or red component for color png) is below tol (defined
 on line 51), then it is considered dark. If there are more than
 "Th" consecutive dark blotches on a column (or "Tw", on a row, the
-two variables defined on line 221), then the row (column) is
+two variables defined on line 53), then the row (column) is
 considered to have actual content and thus excluded from margin.
 After cropping, the Lmargin, Rmargin, Umargin and Bmargin values on
 line 51 are used to determine the remaining margins surrounding

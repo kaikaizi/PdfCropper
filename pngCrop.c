@@ -221,16 +221,15 @@ int procPng(const Png* src, Png* dest){
    dest->width = src->width, dest->height = src->height;
    dest->row = (png_bytep)malloc(png_get_rowbytes(dest->png_ptr,
 		dest->info_ptr));
-   int x,y,c,startRow,endRow,startCol,endCol,
-	 chan = src->channels;
+   int x,y,c,startRow,endRow,startCol,endCol, chan = src->channels;
    bool consec;
    for(y=c=0,dest->row=src->rows[0]; y<dest->height && c<Th;
 	   dest->row=src->rows[++y])
 	for(x=c=0, consec=false; x<dest->width*chan;
 		x+=chan,consec=false){
 	   if(dest->row[x] < tol && !consec){
+		if(++c>=Th)break;
 		consec = true;
-		++c;
 	   }
 	   else if(dest->row[x]>=tol && consec) consec = false;
 	}
@@ -240,8 +239,8 @@ int procPng(const Png* src, Png* dest){
 	for(x=c=0, consec=false; x<dest->width*chan;
 		x+=chan,consec=false){
 	   if(dest->row[x]<tol && !consec){
+		if(++c>=Th)break;
 		consec = true;
-		++c;
 	   }
 	   else if(dest->row[x]>=tol && consec) consec = false;
 	}
@@ -251,14 +250,16 @@ int procPng(const Png* src, Png* dest){
    for(x=c=0; x<dest->width && c<Tw; ++x)
 	for(y=startRow,consec=false; y<endRow; ++y)
 	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
-		++c;	consec=true;
+		if(++c>=Tw)break;
+		consec=true;
 	   }
 	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    startCol=x;
    for(x=dest->width, c=0; x>startCol && c<Tw; --x)
 	for(y=startRow,consec=false; y<endRow; ++y)
 	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
-		++c;	consec=true;
+		if(++c>=Tw)break;
+		consec=true;
 	   }
 	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    endCol=x;
