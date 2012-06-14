@@ -48,8 +48,11 @@ typedef struct{
    png_bytepp rows;
    bool loaded;	// ready to call writeImage()
 } Png;
-int Lmargin=10, Rmargin=10, Umargin=20, Bmargin=50, tol=10;
+int Lmargin=10, Rmargin=10, Umargin=20, Bmargin=50,
 /* Left/Right/Upper/Bottom margins AFTER CROPPING in pixel */
+    tol=10, Th=20, Tw=3;
+/* Binarize threshold; Blotch-counting threshold of
+ * horizontal/vertical directions*/
 
 int writeImage(const char* filename, Png* ppng);
 int read_png_file(const char* file_name, Png*);
@@ -165,7 +168,7 @@ finalise:
 
 int crop(const Png* src, Png* dest, const int dims[]){
    /* dims: left-margin, right-margin, upper-margin, lower-margin */
-   if(src->loaded!=true || !src->rows) return -1;
+   if(!src->loaded || !src->rows) return -1;
    if(dims[0]+dims[1]>src->width)
 	return fprintf(stderr, "crop(): Left/right margins too "
 		"large: [%d %d]>Width=%d\n", dims[0], dims[1],
@@ -213,48 +216,51 @@ inline void suffix(char* dest,const char* src){
 
 int procPng(const Png* src, Png* dest){
    /* judge by consecutive strokes (blotches) */
-   if(src->loaded!=true || !src->rows)
+   if(!src->loaded || !src->rows)
 	return fprintf(stderr, "procPng(): source image not loaded.\n");
    dest->width = src->width, dest->height = src->height;
    dest->row = (png_bytep)malloc(png_get_rowbytes(dest->png_ptr,
 		dest->info_ptr));
-   int x,y,c,startRow,endRow,startCol,endCol, Th=20, Tw=3,
+   int x,y,c,startRow,endRow,startCol,endCol,
 	 chan = src->channels;
    bool consec;
    for(y=c=0,dest->row=src->rows[0]; y<dest->height && c<Th;
 	   dest->row=src->rows[++y])
 	for(x=c=0, consec=false; x<dest->width*chan;
 		x+=chan,consec=false){
-	   if(dest->row[x] < tol && consec==false){
+	   if(dest->row[x] < tol && !consec){
 		consec = true;
 		++c;
 	   }
-	   else if(dest->row[x]>=tol && consec==true) consec = false;
+	   else if(dest->row[x]>=tol && consec) consec = false;
 	}
    startRow=y;
    for(y=dest->height-1,c=0,dest->row=src->rows[y];
 	   y>startRow && c<Th; dest->row=src->rows[--y])
 	for(x=c=0, consec=false; x<dest->width*chan;
 		x+=chan,consec=false){
-	   if(dest->row[x]<tol && consec==false){
+	   if(dest->row[x]<tol && !consec){
 		consec = true;
 		++c;
 	   }
-	   else if(dest->row[x]>=tol && consec==true) consec = false;
+	   else if(dest->row[x]>=tol && consec) consec = false;
 	}
    endRow=y;
    startRow -= startRow>Umargin?Umargin:startRow;
    endRow += endRow+Bmargin+1>dest->height?(dest->height-endRow-1):Bmargin;
-   unsigned char dcnts[dest->width];
-   for(x=dcnts[0]=0; x<dest->width; dcnts[++x]=0)
+   for(x=c=0; x<dest->width && c<Tw; ++x)
 	for(y=startRow,consec=false; y<endRow; ++y)
-	   if(consec==false && *(*(src->rows+y)+x*chan)<tol){
-		++dcnts[x];	consec=true;
+	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
+		++c;	consec=true;
 	   }
-	   else if(consec==true && *(*(src->rows+y)+x*chan)>=tol)consec=false;
-   for(x=0; x<dest->width && dcnts[x]<Tw; ++x);
+	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    startCol=x;
-   for(x=dest->width-1; x>startCol && dcnts[x]<Tw; --x);
+   for(x=dest->width, c=0; x>startCol && c<Tw; --x)
+	for(y=startRow,consec=false; y<endRow; ++y)
+	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
+		++c;	consec=true;
+	   }
+	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    endCol=x;
    if(startCol > Lmargin) startCol-=Lmargin;
    if(endCol < dest->width-Rmargin-1) endCol+=Rmargin;

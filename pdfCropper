@@ -34,3 +34,4 @@ if [ $jobsTot -ne $(ls Oimg-*.png | wc -l) ]; then
 fi
 exit
 convert -compress zip Oimg-*.png $2
+rm -rf /tmp/pdfCropper
