@@ -1,0 +1,36 @@
+#!/bin/bash
+# Usage: cropper src.pdf dest.pdf
+# Put into same directory of png files to use
+if [ $# -ne 2 ]; then
+   echo "Usage: $0 src.pdf dest.pdf"
+   exit
+fi
+mkdir /tmp/pdfCropper
+cp $1 /tmp/pdfCropper
+cd /tmp/pdfCropper
+mupdfextract $(basename $1)
+nParallel=20
+progName='pngCrop'
+jobsDone=0
+jobsTot=$(ls img-*.png | wc -l)
+progress=0
+echo -n "Auto-cropping Progress:  0%"
+for v in $(ls img-*.png); do
+   while [ $(pgrep $progName | wc -l) -gt $nParallel ]; do
+	sleep 0.5s
+   done
+   eval "./$progName $v >/dev/null &"
+   ((jobsDone+=1))
+   ((tmp=jobsDone*10/jobsTot))
+   if [ $tmp -gt $progress ]; then
+	progress=$tmp
+	printf "\b\b\b%d0%%" $progress
+   fi
+done
+wait
+if [ $jobsTot -ne $(ls Oimg-*.png | wc -l) ]; then
+   echo -e "\nOops. Png cropping encountered with some errors."
+   exit 1
+fi
+exit
+convert -compress zip Oimg-*.png $2
