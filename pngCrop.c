@@ -44,59 +44,61 @@ typedef struct{
    png_byte color_type, bit_depth, channels;
    png_structp png_ptr;
    png_infop info_ptr;
-   png_bytep row;
    png_bytepp rows;
    bool loaded;	// ready to call writeImage()
 } Png;
 int Lmargin=10, Rmargin=10, Umargin=20, Bmargin=50,
 /* Left/Right/Upper/Bottom margins AFTER CROPPING in pixel */
-    tol=10, Th=20, Tw=3;
+    tol=10, Th=20, Tw=3,
 /* Binarize threshold; Blotch-counting threshold of
  * horizontal/vertical directions*/
+    accFactor=3;	   /* sugguest accFactor<min(margins)/2 */
+/* accFactor scales loop in procPng and affects only <2% runtime */
 
 int writeImage(const char* filename, Png* ppng);
 int read_png_file(const char* file_name, Png*);
 int crop(const Png* src, Png* dest, const int dim[]);
-int procPng(const Png* psrc, Png* pdest);
+int procPng(const Png* psrc, int[]);
 inline void freePng(Png* ppng);
 inline void suffix(char* dest,const char* src);	   // prepend "O"
 
 int main(int argc, char *argv[]) {
    if (argc!=2)
 	return fprintf(stderr, "Usage: %s src-image\n", argv[0]);
-   Png Ipng, Opng;
+   Png Ipng;
    if(read_png_file(argv[1], &Ipng))
 	return printf("Error caught in read_png_file\n");
+   int dims[] = {480,480,450,450};
    /* Manual control of margins
     * left/right/upper/bottom margins TO CROP in pixel
-    * int dims[] = {480,480,450,450};
     * if(crop(&Ipng, &Opng, dims)) */
-
    /* Simple thresholding of consecutive dark blotches */
-   if(procPng(&Ipng, &Opng))
+   if(procPng(&Ipng, dims))
 	fprintf(stderr, "Error in \"%s\": No output image generated.\n", argv[1]);
    else{
 	char Oname[strlen(argv[1])+2];
 	suffix(Oname,argv[1]);
-	writeImage(Oname, &Opng);
+	Png Opng;
+	if(crop(&Ipng, &Opng, dims))
+	   fprintf(stderr, "Error in \"%s\": No output image generated.\n", argv[1]);
+	else writeImage(Oname, &Opng);
+	freePng(&Opng);
    }
-   freePng(&Ipng); freePng(&Opng);
+   freePng(&Ipng);
    return 0;
 }
 
-int writeImage(const char* filename, Png* ppng) {
+int writeImage(const char* filename, Png* ppng){
    int code=0;
    FILE *fp;
    fp = fopen(filename, "wb");
-   if(!fp) {
-	fprintf(stderr, "Could not open file %s for writing\n", filename);
-	code = 1;
+   if(!fp){
+	code=fprintf(stderr, "Could not open file %s for writing\n", filename);
 	goto finalise;
    }
    ppng->png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, 0, 0, 0);
-   if(!ppng->png_ptr) {
-	fprintf(stderr, "Could not allocate write struct\n");
-	code = 1;
+   if(!ppng->png_ptr){
+	code=fprintf(stderr, "Could not allocate write struct\n");
 	goto finalise;
    }
    png_init_io(ppng->png_ptr, fp);
@@ -111,7 +113,7 @@ finalise:
    return code;
 }
 
-int read_png_file(const char* file_name, Png* ppng) {
+int read_png_file(const char* file_name, Png* ppng){
    int code=0, headMax=8,y;
    char header[headMax];
    FILE *fp = fopen(file_name, "rb");
@@ -154,8 +156,6 @@ int read_png_file(const char* file_name, Png* ppng) {
 	goto finalise;
    }
    ppng->rows = (png_bytep*)malloc(sizeof(png_bytep)*ppng->height);
-   ppng->row = (png_bytep)malloc(png_get_rowbytes(ppng->png_ptr,
-		ppng->info_ptr));
    for(y=0; y<ppng->height; ++y)
 	ppng->rows[y] = (png_bytep)malloc(png_get_rowbytes(
 		   ppng->png_ptr, ppng->info_ptr));
@@ -171,18 +171,15 @@ int crop(const Png* src, Png* dest, const int dims[]){
    if(!src->loaded || !src->rows) return -1;
    if(dims[0]+dims[1]>src->width)
 	return fprintf(stderr, "crop(): Left/right margins too "
-		"large: [%d %d]>Width=%d\n", dims[0], dims[1],
-		src->width);
+		"large: [%d %d]>Width=%d\n", dims[0], dims[1], src->width);
    else if(dims[2]+dims[3]>src->height)
 	return fprintf(stderr, "crop(): Upper/lower margins too "
-		"large: [%d %d]>Height=%d\n", dims[2], dims[3],
-		src->height);
+		"large: [%d %d]>Height=%d\n", dims[2], dims[3], src->height);
    int y, startCol=dims[0], endCol=src->width-dims[1]-1,
 	   startRow=dims[2], endRow=src->height-dims[3]-1,
 	   chan=src->channels;
    dest->width = endCol-startCol+1;
    dest->height = endRow-startRow+1;
-   dest->row = (png_bytep)malloc(chan*sizeof(png_byte)*dest->width);
    dest->rows = (png_bytepp)malloc(sizeof(png_bytep)*dest->height);
    for(y=0; y < dest->height; ++y){
 	dest->rows[y] = (png_bytep)malloc(chan*dest->width*
@@ -200,7 +197,6 @@ int crop(const Png* src, Png* dest, const int dims[]){
 
 inline void freePng(Png* ppng){
    if(!ppng)return;
-   if(ppng->row)free(ppng->row);
    int y;
    if(ppng->rows)
 	for(y=0; y<ppng->height; ++y)free(ppng->rows[y]);
@@ -214,49 +210,44 @@ inline void suffix(char* dest,const char* src){
    strcpy(dest+last_slash+1, src+last_slash); 
 }
 
-int procPng(const Png* src, Png* dest){
+int procPng(const Png* src, int dim[]){
    /* judge by consecutive strokes (blotches) */
    if(!src->loaded || !src->rows)
 	return fprintf(stderr, "procPng(): source image not loaded.\n");
-   dest->width = src->width, dest->height = src->height;
-   dest->row = (png_bytep)malloc(png_get_rowbytes(dest->png_ptr,
-		dest->info_ptr));
    int x,y,c,startRow,endRow,startCol,endCol, chan = src->channels;
    bool consec;
-   for(y=c=0,dest->row=src->rows[0]; y<dest->height && c<Th;
-	   dest->row=src->rows[++y])
-	for(x=c=0, consec=false; x<dest->width*chan;
-		x+=chan,consec=false){
-	   if(dest->row[x] < tol && !consec){
+   for(y=c=0; y<src->height && c<Th; y+=accFactor)
+	for(x=c=0, consec=false; x<src->width*chan;
+		x+=accFactor*chan,consec=false){
+	   if(*(*(src->rows+y)+x) < tol && !consec){
 		if(++c>=Th)break;
 		consec = true;
 	   }
-	   else if(dest->row[x]>=tol && consec) consec = false;
+	   else if(*(*(src->rows+y)+x)>=tol && consec) consec = false;
 	}
    startRow=y;
-   for(y=dest->height-1,c=0,dest->row=src->rows[y];
-	   y>startRow && c<Th; dest->row=src->rows[--y])
-	for(x=c=0, consec=false; x<dest->width*chan;
-		x+=chan,consec=false){
-	   if(dest->row[x]<tol && !consec){
+   for(y=src->height-1,c=0; y>startRow && c<Th; y-=accFactor)
+	for(x=c=0, consec=false; x<src->width*chan;
+		x+=accFactor*chan,consec=false){
+	   if(*(*(src->rows+y)+x)<tol && !consec){
 		if(++c>=Th)break;
 		consec = true;
 	   }
-	   else if(dest->row[x]>=tol && consec) consec = false;
+	   else if(*(*(src->rows+y)+x)>=tol && consec) consec = false;
 	}
    endRow=y;
    startRow -= startRow>Umargin?Umargin:startRow;
-   endRow += endRow+Bmargin+1>dest->height?(dest->height-endRow-1):Bmargin;
-   for(x=c=0; x<dest->width && c<Tw; ++x)
-	for(y=startRow,consec=false; y<endRow; ++y)
+   endRow += endRow+Bmargin+1>src->height?(src->height-endRow-1):Bmargin;
+   for(x=c=0; x<src->width && c<Tw; x+=accFactor)
+	for(y=startRow,consec=false; y<endRow; y+=accFactor)
 	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
 		if(++c>=Tw)break;
 		consec=true;
 	   }
 	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    startCol=x;
-   for(x=dest->width, c=0; x>startCol && c<Tw; --x)
-	for(y=startRow,consec=false; y<endRow; ++y)
+   for(x=src->width, c=0; x>startCol && c<Tw; x-=accFactor)
+	for(y=startRow,consec=false; y<endRow; y+=accFactor)
 	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
 		if(++c>=Tw)break;
 		consec=true;
@@ -264,8 +255,8 @@ int procPng(const Png* src, Png* dest){
 	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
    endCol=x;
    if(startCol > Lmargin) startCol-=Lmargin;
-   if(endCol < dest->width-Rmargin-1) endCol+=Rmargin;
-   int dims[]={startCol, src->width-endCol-1,
-	startRow, src->height-endRow-1};
-   return crop(src, dest, dims);
+   if(endCol < src->width-Rmargin-1) endCol+=Rmargin;
+   dim[0]=startCol; dim[1]=src->width-endCol-1;
+   dim[2]=startRow; dim[3]=src->height-endRow-1;
+   return 0;
 }
