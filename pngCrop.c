@@ -1,5 +1,4 @@
-// VimMake: LDFLAGS=(-lpng -O2)
-/* Note: -O gcc option causes segmentation fault */
+// VimMake: LDFLAGS=(-lpng -O3)
 
 /* Copyright (c) 2012, Liu Lukai (liulukai@gmail.com)
 All rights reserved.

@@ -13,12 +13,12 @@ where xx.png is the original name) under the same directory.
 
 Editing source file to suit your needs. To manually set the left /
 right / upper / bottom margins in pixels to crop, uncomment line
-74 and edit dims array (and comment out line 76).
+73 and edit dims array (and comment out line 75).
 
 The automation of margin detection (procPng()) is based on simple
 thresholding of consecutive dark blotches for a row (column). The
 brightness (or red component for color png) is below tol (defined
-on line 52), then it is considered dark. If there are more than
+on line 51), then it is considered dark. If there are more than
 "Th" consecutive dark blotches on a column (or "Tw", on a row, the
 two variables), then the row (column) is
 considered to have actual content and thus excluded from margin.
@@ -32,8 +32,6 @@ on *NIX file system and regards '/' symbol as directory. It
 prepends character 'O' before the input png file name.
 
 Requirement: libpng.
-
-BUGS: -O3 optimization option causes program to crash.
 
 Automatic PDF cropping:
 
