@@ -35,7 +35,7 @@ interpreted as representing official policies, either
 expressed or implied, of the FreeBSD Project. */
 
 #include <stdlib.h>
-#include <png.h>
+#include </usr/include/png.h>
 
 typedef enum{false=0,true}bool;
 typedef struct{
@@ -45,14 +45,15 @@ typedef struct{
    png_infop info_ptr;
    png_bytepp rows;
    bool loaded;	// ready to call writeImage()
-} Png;
-int Lmargin=10, Rmargin=10, Umargin=20, Bmargin=50,
+}Png;
+int Lmargin=10, Rmargin=10, Umargin=10, Bmargin=10,
 /* Left/Right/Upper/Bottom margins AFTER CROPPING in pixel */
-    tol=10, Th=20, Tw=3,
-/* Binarize threshold; Blotch-counting threshold of
+    tol=20, Th=8, Tw=8,
+/* Binarize threshold; NOTE: KEY PARAMETER, Blotch-counting threshold of
  * horizontal/vertical directions*/
-    accFactor=3;	   /* sugguest accFactor<min(margins)/2 */
+    accFactor=2;	   /* sugguest accFactor<min(margins)/2 */
 /* accFactor scales loop in procPng and affects only <2% runtime */
+bool WhiteBG=true;
 
 int writeImage(const char* filename, Png* ppng);
 int read_png_file(const char* file_name, Png*);
@@ -174,7 +175,7 @@ int crop(const Png* src, Png* dest, const int dims[]){
    else if(dims[2]+dims[3]>src->height)
 	return fprintf(stderr, "crop(): Upper/lower margins too "
 		"large: [%d %d]>Height=%d\n", dims[2], dims[3], src->height);
-   int y, startCol=dims[0], endCol=src->width-dims[1]-1,
+   int y, startCol=dims[0], endCol=src->width-dims[1]-1, /*NOTE: modified*/
 	   startRow=dims[2], endRow=src->height-dims[3]-1,
 	   chan=src->channels;
    dest->width = endCol-startCol+1;
@@ -184,7 +185,7 @@ int crop(const Png* src, Png* dest, const int dims[]){
 	dest->rows[y] = (png_bytep)malloc(chan*dest->width*
 		sizeof(png_byte));
 	png_bytep tmp = src->rows[y+startRow];
-	memcpy(dest->rows[y], tmp+startCol,
+	memcpy(dest->rows[y], tmp+startCol*chan,
 		chan*sizeof(png_byte)*dest->width);
    }
    dest->png_ptr = src->png_ptr; dest->info_ptr = src->info_ptr;
@@ -209,49 +210,62 @@ inline void suffix(char* dest,const char* src){
    strcpy(dest+last_slash+1, src+last_slash); 
 }
 
+inline int belowTol(const png_bytep first){
+   return WhiteBG==true ? *first<tol : *first>255-tol;
+}
+
+void chkBG(const Png* src){
+   const int chkN = 32;	   /* #pixels that get checked horizontally / vertically */
+   int xJmp=src->width/chkN | 1, yJmp=src->height/chkN | 1, accBlack=0, x,y;
+   for(y=0; y<src->height; y+=yJmp)
+	for(x=0; x<src->width; x+=xJmp, accBlack+=*(*(src->rows+y)+x)<tol);
+   WhiteBG = accBlack*2 < chkN*chkN;
+}
+
 int procPng(const Png* src, int dim[]){
    /* judge by consecutive strokes (blotches) */
    if(!src->loaded || !src->rows)
 	return fprintf(stderr, "procPng(): source image not loaded.\n");
+   //chkBG(src);	   /* on rarity, documents use dark background */
    int x,y,c,startRow,endRow,startCol,endCol, chan = src->channels;
    bool consec;
    for(y=c=0; y<src->height && c<Th; y+=accFactor)
 	for(x=c=0, consec=false; x<src->width*chan;
 		x+=accFactor*chan,consec=false){
-	   if(*(*(src->rows+y)+x) < tol && !consec){
+	   if(!consec && belowTol(*(src->rows+y)+x)){
 		if(++c>=Th)break;
 		consec = true;
 	   }
-	   else if(*(*(src->rows+y)+x)>=tol && consec) consec = false;
+	   else if(!belowTol(*(src->rows+y)+x) && consec) consec = false;
 	}
    startRow=y;
    for(y=src->height-1,c=0; y>startRow && c<Th; y-=accFactor)
 	for(x=c=0, consec=false; x<src->width*chan;
 		x+=accFactor*chan,consec=false){
-	   if(*(*(src->rows+y)+x)<tol && !consec){
+	   if(!consec && belowTol(*(src->rows+y)+x)){
 		if(++c>=Th)break;
 		consec = true;
 	   }
-	   else if(*(*(src->rows+y)+x)>=tol && consec) consec = false;
+	   else if(!belowTol(*(src->rows+y)+x) && consec) consec = false;
 	}
    endRow=y;
    startRow -= startRow>Umargin?Umargin:startRow;
    endRow += endRow+Bmargin+1>src->height?(src->height-endRow-1):Bmargin;
    for(x=c=0; x<src->width && c<Tw; x+=accFactor)
 	for(y=startRow,consec=false; y<endRow; y+=accFactor)
-	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
+	   if(!consec && belowTol(*(src->rows+y)+x*chan)){
 		if(++c>=Tw)break;
 		consec=true;
 	   }
-	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
+	   else if(consec && !belowTol(*(src->rows+y)+x*chan))consec=false;
    startCol=x;
    for(x=src->width, c=0; x>startCol && c<Tw; x-=accFactor)
 	for(y=startRow,consec=false; y<endRow; y+=accFactor)
-	   if(!consec && *(*(src->rows+y)+x*chan)<tol){
+	   if(!consec && belowTol(*(src->rows+y)+x*chan)){
 		if(++c>=Tw)break;
 		consec=true;
 	   }
-	   else if(consec && *(*(src->rows+y)+x*chan)>=tol)consec=false;
+	   else if(consec && !belowTol(*(src->rows+y)+x*chan))consec=false;
    endCol=x;
    if(startCol > Lmargin) startCol-=Lmargin;
    if(endCol < src->width-Rmargin-1) endCol+=Rmargin;

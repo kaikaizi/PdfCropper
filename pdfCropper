@@ -5,21 +5,24 @@ if [ $# -ne 2 ]; then
    echo "Usage: $0 src.pdf dest.pdf"
    exit
 fi
-mkdir /tmp/pdfCropper
-cp $1 /tmp/pdfCropper
-cd /tmp/pdfCropper
-mupdfextract $(basename $1)
+echo $1; exit
+prog=pngCrop
+progName=`dirname $0`/$prog
+odirName=`pwd`
+dirName=/tmp/pdfCropper
+rm -rf $dirName; mkdir $dirName
+mudraw -g -o $dirName/page%04d.png $(basename $1)
+cd $dirName
 nParallel=20
-progName='pngCrop'
 jobsDone=0
-jobsTot=$(ls img-*.png | wc -l)
+jobsTot=$(ls page*.png | wc -l)
 progress=0
 echo -n "Auto-cropping Progress:  0%"
-for v in $(ls img-*.png); do
-   while [ $(pgrep $progName | wc -l) -gt $nParallel ]; do
+for v in $(ls page*.png); do
+   while [ $(pgrep $prog | wc -l) -gt $nParallel ]; do
 	sleep 0.5s
    done
-   eval "./$progName $v >/dev/null &"
+   eval "$progName $v >/dev/null &"
    ((jobsDone+=1))
    ((tmp=jobsDone*10/jobsTot))
    if [ $tmp -gt $progress ]; then
@@ -28,10 +31,8 @@ for v in $(ls img-*.png); do
    fi
 done
 wait
-if [ $jobsTot -ne $(ls Oimg-*.png | wc -l) ]; then
+if [ $jobsTot -ne $(ls Opage*.png | wc -l) ]; then
    echo -e "\nOops. Png cropping encountered with some errors."
    exit 1
 fi
-exit
-convert -compress zip Oimg-*.png $2
-rm -rf /tmp/pdfCropper
+gm convert -compress Bzip -quality 100 $dirName/Opage*.png $odirName/$2
