@@ -35,6 +35,7 @@ interpreted as representing official policies, either
 expressed or implied, of the FreeBSD Project. */
 
 #include <stdlib.h>
+#include <string.h>
 #include </usr/include/png.h>
 
 typedef enum{false=0,true}bool;
@@ -46,21 +47,20 @@ typedef struct{
    png_bytepp rows;
    bool loaded;	// ready to call writeImage()
 }Png;
-int Lmargin=10, Rmargin=10, Umargin=10, Bmargin=10,
-/* Left/Right/Upper/Bottom margins AFTER CROPPING in pixel */
-    tol=20, Th=8, Tw=8,
-/* Binarize threshold; NOTE: KEY PARAMETER, Blotch-counting threshold of
- * horizontal/vertical directions*/
-    accFactor=2;	   /* sugguest accFactor<min(margins)/2 */
-/* accFactor scales loop in procPng and affects only <2% runtime */
+int marginH=10, marginV=10, /* horizontal/vertical margins AFTER CROPPING in pixel */
+    tol=20,	 /* Binarize threshold */ accFactor=2, /* accFactor<min(margins)/2 */
+    perc=50;/* percentile of horizontal/vertical line-scan to
+		    find margins, between 0 and 100 exclusively */
 bool WhiteBG=true;
 
 int writeImage(const char* filename, Png* ppng);
 int read_png_file(const char* file_name, Png*);
 int crop(const Png* src, Png* dest, const int dim[]);
 int procPng(const Png* psrc, int[]);
+int shortcut(const char*,const char*);
 inline void freePng(Png* ppng);
 inline void suffix(char* dest,const char* src);	   // prepend "O"
+inline short percArray(unsigned short*,const int);
 
 int main(int argc, char *argv[]) {
    if (argc!=2)
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
    Png Ipng;
    if(read_png_file(argv[1], &Ipng))
 	return printf("Error caught in read_png_file\n");
-   int dims[] = {480,480,450,450};
+   int dims[] = {480,480,450,450}, ret;
    /* Manual control of margins
     * left/right/upper/bottom margins TO CROP in pixel
     * if(crop(&Ipng, &Opng, dims)) */
@@ -79,8 +79,9 @@ int main(int argc, char *argv[]) {
 	char Oname[strlen(argv[1])+2];
 	suffix(Oname,argv[1]);
 	Png Opng;
-	if(crop(&Ipng, &Opng, dims))
+	if((ret=crop(&Ipng, &Opng, dims))>0)
 	   fprintf(stderr, "Error in \"%s\": No output image generated.\n", argv[1]);
+	else if(ret==-1)return shortcut(argv[1],Oname);
 	else writeImage(Oname, &Opng);
 	freePng(&Opng);
    }
@@ -166,6 +167,16 @@ finalise:
    return code;
 }
 
+int shortcut(const char* fname,const char* dname){/* copy to destination */
+   FILE* inf=fopen(fname,"r"), *outf=fopen(dname,"w");
+   if(!inf || !outf)return fprintf(stderr,
+	   "Cannot open files \"%s\" and \"%s\" for piping\n", inf,outf);
+   char c;
+   while(c=fgetc(inf))fputc(c,outf);
+   fclose(inf); fclose(outf);
+   return 0;
+}
+
 int crop(const Png* src, Png* dest, const int dims[]){
    /* dims: left-margin, right-margin, upper-margin, lower-margin */
    if(!src->loaded || !src->rows) return -1;
@@ -178,6 +189,8 @@ int crop(const Png* src, Png* dest, const int dims[]){
    int y, startCol=dims[0], endCol=src->width-dims[1]-1, /*NOTE: modified*/
 	   startRow=dims[2], endRow=src->height-dims[3]-1,
 	   chan=src->channels;
+   if(!startRow&&!startCol && endRow==src->height-1&&endCol==src->width-1)
+	return -1;   /* no need to crop */
    dest->width = endCol-startCol+1;
    dest->height = endRow-startRow+1;
    dest->rows = (png_bytepp)malloc(sizeof(png_bytep)*dest->height);
@@ -222,53 +235,71 @@ void chkBG(const Png* src){
    WhiteBG = accBlack*2 < chkN*chkN;
 }
 
+int comp(const void*lhs, const void*rhs){
+   const unsigned short* lnum=(const unsigned short*)lhs,
+	   *rnum=(const unsigned short*)rhs;
+   return *lnum>*rnum?1:(*lnum==*rnum?0:-1);
+}
+short percArray(unsigned short*arr,const int size){
+   qsort(arr, size, sizeof(unsigned short),comp);
+   return arr[size*perc/100];
+}
+
 int procPng(const Png* src, int dim[]){
    /* judge by consecutive strokes (blotches) */
-   if(!src->loaded || !src->rows)
-	return fprintf(stderr, "procPng(): source image not loaded.\n");
+   if(!src->loaded || !src->rows)return fprintf(stderr,
+	   "procPng(): source image not loaded.\n");
    //chkBG(src);	   /* on rarity, documents use dark background */
-   int x,y,c,startRow,endRow,startCol,endCol, chan = src->channels;
-   bool consec;
-   for(y=c=0; y<src->height && c<Th; y+=accFactor)
-	for(x=c=0, consec=false; x<src->width*chan;
-		x+=accFactor*chan,consec=false){
-	   if(!consec && belowTol(*(src->rows+y)+x)){
-		if(++c>=Th)break;
-		consec = true;
-	   }
-	   else if(!belowTol(*(src->rows+y)+x) && consec) consec = false;
-	}
+   int x,y,c,startRow,endRow,startCol,endCol, chan=src->channels, consec;
+   /* line scans, extract percentile of blotches, set as threshold Th, Tv */
+   unsigned short cnt, szH=src->height/accFactor, nBlotchHor[szH],
+			szV=src->width/accFactor, nBlotchVert[szV];
+   memset(nBlotchHor,0,szH); memset(nBlotchVert,0,szV);
+   for(y=cnt=0; y<src->height; y+=accFactor){	/* horizontal scan */
+	for(x=c=0, consec=0; x<src->width*chan;
+		x+=accFactor*chan,consec=0)
+	   if(!consec&&belowTol(*(src->rows+y)+x))consec=++c;
+	   else if(consec&&!belowTol(*(src->rows+y)+x))consec=0;
+	nBlotchHor[cnt++]=c;
+   }
+   for(x=cnt=0; x<src->width; x+=accFactor){	/* vertical scan */
+	for(y=c=0,consec=0; y<src->height; y+=accFactor)
+	   if(!consec&&belowTol(*(src->rows+y)+x*chan))consec=++c;
+	   else if(consec&&!belowTol(*(src->rows+y)+x*chan))consec=0;
+	nBlotchVert[cnt++]=c;
+   }
+   int Th=percArray(nBlotchHor,szH), Tv=percArray(nBlotchVert,szV);
+   /* find truncation dimension */
+   for(y=c=0; y<src->height && c<=Th; y+=accFactor)
+	for(x=c=0, consec=0; x<src->width*chan;
+		x+=accFactor*chan,consec=0)
+	   if(!consec&&belowTol(*(src->rows+y)+x)&&(consec=++c)>Th)break;
+	   else if(consec&&!belowTol(*(src->rows+y)+x))consec=0;
    startRow=y;
-   for(y=src->height-1,c=0; y>startRow && c<Th; y-=accFactor)
-	for(x=c=0, consec=false; x<src->width*chan;
-		x+=accFactor*chan,consec=false){
-	   if(!consec && belowTol(*(src->rows+y)+x)){
-		if(++c>=Th)break;
-		consec = true;
-	   }
-	   else if(!belowTol(*(src->rows+y)+x) && consec) consec = false;
-	}
+   for(y=src->height-1,c=0; y>startRow && c<=Th; y-=accFactor)
+	for(x=c=0, consec=0; x<src->width*chan;
+		x+=accFactor*chan,consec=0)
+	   if(!consec&&belowTol(*(src->rows+y)+x)&&(consec=++c)>Th)break;
+	   else if(consec&&!belowTol(*(src->rows+y)+x))consec=0;
    endRow=y;
-   startRow -= startRow>Umargin?Umargin:startRow;
-   endRow += endRow+Bmargin+1>src->height?(src->height-endRow-1):Bmargin;
-   for(x=c=0; x<src->width && c<Tw; x+=accFactor)
-	for(y=startRow,consec=false; y<endRow; y+=accFactor)
-	   if(!consec && belowTol(*(src->rows+y)+x*chan)){
-		if(++c>=Tw)break;
-		consec=true;
-	   }
-	   else if(consec && !belowTol(*(src->rows+y)+x*chan))consec=false;
+   if(startRow>marginV)startRow-=marginV;
+   else startRow=0;  /* leave poor margin already in there alone */
+   if(endRow+marginV+1<src->height)endRow+=marginV;
+   else endRow=src->height-1;
+   for(x=0; x<src->width && c<=Tv; x+=accFactor)
+	for(y=startRow,consec=c=0; y<endRow; y+=accFactor)
+	   if(!consec&&belowTol(*(src->rows+y)+x*chan)&&(consec=++c)>Tv)break;
+	   else if(consec&&!belowTol(*(src->rows+y)+x*chan))consec=0;
    startCol=x;
-   for(x=src->width, c=0; x>startCol && c<Tw; x-=accFactor)
-	for(y=startRow,consec=false; y<endRow; y+=accFactor)
-	   if(!consec && belowTol(*(src->rows+y)+x*chan)){
-		if(++c>=Tw)break;
-		consec=true;
-	   }
-	   else if(consec && !belowTol(*(src->rows+y)+x*chan))consec=false;
+   for(x=src->width-1,c=0; x>startCol && c<=Tv; x-=accFactor)
+	for(y=startRow,consec=c=0; y<endRow; y+=accFactor)
+	   if(!consec&&belowTol(*(src->rows+y)+x*chan)&&(consec=++c)>Tv)break;
+	   else if(consec&&!belowTol(*(src->rows+y)+x*chan))consec=0;
    endCol=x;
-   if(startCol > Lmargin) startCol-=Lmargin;
-   if(endCol < src->width-Rmargin-1) endCol+=Rmargin;
+   if(startCol>marginH)startCol-=marginH;
+   else startCol=0;
+   if(endCol<src->width-marginH-1)endCol+=marginH;
+   else endCol=src->width-1;
    dim[0]=startCol; dim[1]=src->width-endCol-1;
    dim[2]=startRow; dim[3]=src->height-endRow-1;
    return 0;
